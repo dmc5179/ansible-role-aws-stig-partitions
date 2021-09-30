@@ -1,2 +1,266 @@
 ---
 # tasks file for ansible-role-aws-stig-partitions
+
+#- name: Find or Create temporary node
+#  include_tasks: temporary_node.yaml
+
+#- fail:
+#    msg: "stop here"
+
+- name: Gather information about the target instance
+  community.aws.ec2_instance_info:
+    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+    instance_ids:
+      - "{{ aws_instance_id }}"
+  register: target_instance_info
+  delegate_to: localhost
+  delegate_facts: true
+
+- name: Determine new root volume size
+  set_fact:
+    new_root_volume_size: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home + partition_size.var_log_audit }}"
+
+- debug:
+    var: target_instance_info.instances[0]
+#    var: target_instance_info.instances[0].block_device_mappings[target_instance_info.instances[0].root_device_name]
+
+#- fail:
+#    msg: "stop here"
+
+- name: Stop the target instance
+  community.aws.ec2_instance:
+    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+    state: stopped
+    wait: true
+    wait_timeout: 600
+    instance_ids:
+      - "{{ aws_instance_id }}"
+
+- name: Detach root volume from the instance to be resized
+  delegate_to: localhost
+  amazon.aws.ec2_vol:
+    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
+    instance: None
+
+#- name: Resize the volume
+#  delegate_to: localhost
+#  shell: "aws ec2 modify-volume --size {{ new_root_volume_size }} --volume-id {{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}"
+
+- name: Attach volume to be repartitioned to temp node
+  delegate_to: localhost
+  amazon.aws.ec2_vol:
+    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
+    instance: '{{ temp_node_id }}'
+    device_name: '{{ temp_node_device_name }}'
+
+- name: Resize the root partition
+  delegate_to: temp_node
+  community.general.parted:
+    device: '{{ temp_node_device_name }}'
+    number: 1
+    part_end: "{{ partition_size.root }}GiB"
+    #unit: "GiB"
+    resize: true
+    fs_type: "xfs"
+    state: present
+  tags:
+    - dan
+
+- name: Get root partition block ID
+  delegate_to: temp_node
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}1'
+  register: root_block_id
+
+- name: Create tmp partition
+  delegate_to: temp_node
+  community.general.parted:
+    device: '{{ temp_node_device_name }}'
+    number: 2
+    part_start: "{{ partition_size.root }}GiB"
+    part_end: "{{ partition_size.root + partition_size.tmp }}GiB"
+    #unit: "GiB"
+    fs_type: "xfs"
+    state: present
+
+- name: Create tmp filesystem
+  delegate_to: temp_node
+  community.general.filesystem:
+    fstype: xfs
+    dev: '{{ temp_node_device_name }}2'
+
+- name: Get tmp partition block ID
+  delegate_to: temp_node
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}2'
+  register: tmp_block_id
+
+- name: Create var partition
+  delegate_to: temp_node
+  community.general.parted:
+    device: '{{ temp_node_device_name }}'
+    number: 3
+    part_start: "{{ partition_size.root + partition_size.tmp }}GiB"
+    part_end: "{{ partition_size.root + partition_size.tmp + partition_size.var }}GiB"
+    #unit: "GiB"
+    fs_type: "xfs"
+    state: present
+
+- name: Create var filesystem
+  delegate_to: temp_node
+  community.general.filesystem:
+    fstype: xfs
+    dev: '{{ temp_node_device_name }}3'
+
+- name: Get var partition block ID
+  delegate_to: temp_node
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}3'
+  register: var_block_id
+
+- name: Create home partition
+  delegate_to: temp_node
+  community.general.parted:
+    device: '{{ temp_node_device_name }}'
+    number: 4
+    part_start: "{{ partition_size.root + partition_size.tmp + partition_size.var }}GiB"
+    part_end: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home }}GiB"
+    #unit: "GiB"
+    fs_type: "xfs"
+    state: present
+
+- name: Create home filesystem
+  delegate_to: temp_node
+  community.general.filesystem:
+    fstype: xfs
+    dev: '{{ temp_node_device_name }}4'
+
+- name: Get home partition block ID
+  delegate_to: temp_node
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}4'
+  register: home_block_id
+
+- name: Create var_log_audit partition
+  delegate_to: temp_node
+  community.general.parted:
+    device: '{{ temp_node_device_name }}'
+    number: 5
+    part_start: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home }}GiB"
+    part_end: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home + partition_size.var_log_audit }}GiB"
+    #unit: "GiB"
+    fs_type: "xfs"
+    state: present
+
+- name: Create var_log_audit filesystem
+  delegate_to: temp_node
+  community.general.filesystem:
+    fstype: xfs
+    dev: '{{ temp_node_device_name }}5'
+
+- name: Get var_log_audit partition block ID
+  delegate_to: temp_node
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}5'
+  register: vla_block_id
+
+- name: Mount the root file system from the target node
+  delegate_to: temp_node
+  ansible.posix.mount:
+    path: /opt/root
+    src: "UUID={{ root_block_id }}"
+    fstype: xfs
+    state: mounted
+
+- name: Resize the root filesystem
+  delegate_to: temp_node
+  community.general.filesystem:
+    fstype: xfs
+    resizefs: true
+    dev: '{{ temp_node_device_name }}1'
+
+- name: Create entry in fstab for tmp
+  delegate_to: temp_node
+  ansible.posix.mount:
+    path: /tmp
+    src: "UUID={{ tmp_block_id }}"
+    fstype: xfs
+    fstab: '/opt/root/etc/fstab'
+    state: present
+
+- name: Create entry in fstab for var
+  delegate_to: temp_node
+  ansible.posix.mount:
+    path: /var
+    src: "UUID={{ var_block_id }}"
+    fstype: xfs
+    fstab: '/opt/root/etc/fstab'
+    state: present
+
+- name: Create entry in fstab for home
+  delegate_to: temp_node
+  ansible.posix.mount:
+    path: /home
+    src: "UUID={{ home_block_id }}"
+    fstype: xfs
+    fstab: '/opt/root/etc/fstab'
+    state: present
+
+- name: Create entry in fstab for var_log_audit
+  delegate_to: temp_node
+  ansible.posix.mount:
+    path: /var/log/audit
+    src: "UUID={{ vla_block_id }}"
+    fstype: xfs
+    fstab: '/opt/root/etc/fstab'
+    state: present
+
+- name: Unmount the root file system from the target node
+  delegate_to: temp_node
+  ansible.posix.mount:
+    path: /opt/root
+    src: "UUID={{ root_block_id }}"
+    fstype: xfs
+    state: absent
+
+- name: Detach root volume from the instance to be resized
+  delegate_to: localhost
+  amazon.aws.ec2_vol:
+    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
+    instance: None
+
+- name: Reattach the volume to the target node
+  delegate_to: localhost
+  amazon.aws.ec2_vol:
+    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+    instance: '{{ target_instance_info.instances[0].instance_id }}'
+    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
+    device_name: '{{ target_instance_info.instances[0].block_device_mappings[0].device_name }}'

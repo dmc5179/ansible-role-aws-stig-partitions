@@ -1,0 +1,28 @@
+---
+
+- name: RHEL-6-INSTANCE | Gather information from RHEL6 instance
+  community.aws.ec2_instance_info:
+    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+    filters:
+      "tag:task": '{{ temp_node_tag }}'
+  register: temp_node_info
+  delegate_to: localhost
+  delegate_facts: true
+
+#- debug:
+#    var: temp_node_info
+
+- name: Fail if we cannot find a temp node
+  fail:
+    msg: "Unable to find a node with the tag key/value of task: {{ temp_node_tag }}"
+  when: (temp_node_info.instances | length == 0)
+
+- name:
+  set_fact:
+    temp_node_id: "{{ temp_node_info.instances[0].instance_id }}"
+  when: (temp_node_info.instances | length > 0)
