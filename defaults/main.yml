@@ -1,2 +1,29 @@
 ---
 # defaults file for ansible-role-aws-stig-partitions
+
+# Instance ID of the node to repartition
+aws_instance_id: i-0b662b933395f1a9e
+
+new_root_volume_size: 100
+
+# Size of each partition in GBs
+partition_size:
+  root:
+    begin: "0%"
+    end: "30%"
+  tmp:
+    begin: "30%"
+    end: "40%"
+  var:
+    begin: "40%"
+    end: "50%"
+  var_log_audit:
+    begin: "50%"
+    end: "60%"
+  home:
+    begin: "60%"
+    end: "100%"
+
+# Info about the infra node used to repartition the target node
+#temp_node_tag: "stig_partitioner"
+temp_node_id: i-08b5eaa5776452247

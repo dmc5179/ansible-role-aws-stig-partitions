@@ -23,11 +23,28 @@
 
 - name: Determine new root volume size
   set_fact:
-    new_root_volume_size: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home + partition_size.var_log_audit }}"
+    new_root_volume_size: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home + partition_size.var_log_audit | int}}"
 
-- debug:
-    var: target_instance_info.instances[0]
+#- debug:
+#    var: target_instance_info.instances[0]
 #    var: target_instance_info.instances[0].block_device_mappings[target_instance_info.instances[0].root_device_name]
+
+- name: Gather information about target instance root volume size
+  amazon.aws.ec2_vol_info:
+    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+    filters:
+      volume-id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
+  register: target_root_vol_info
+
+- name: Stop if the new size is smaller than the current size
+  fail:
+    msg: "New size is smaller than existing volume size, aborting"
+  when: ( target_root_vol_info.volumes[0].size > (new_root_volume_size | int) )
 
 #- fail:
 #    msg: "stop here"
@@ -58,9 +75,17 @@
     id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
     instance: None
 
-#- name: Resize the volume
-#  delegate_to: localhost
-#  shell: "aws ec2 modify-volume --size {{ new_root_volume_size }} --volume-id {{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}"
+  # Only resize the volume to make it bigger
+- name: Resize the volume
+  delegate_to: localhost
+  shell: "aws ec2 modify-volume --size {{ new_root_volume_size }} --volume-id {{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}"
+  when: ( target_root_vol_info.volumes[0].size < (new_root_volume_size | int) )
+
+  # only pause if we resized the EBS volume
+- name: Wait for EBS resize to transition to available
+  pause:
+    seconds: 10
+  when: ( target_root_vol_info.volumes[0].size < (new_root_volume_size | int) )
 
 - name: Attach volume to be repartitioned to temp node
   delegate_to: localhost
@@ -73,34 +98,51 @@
     validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
     id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
     instance: '{{ temp_node_id }}'
-    device_name: '{{ temp_node_device_name }}'
+    device_name: '/dev/xvdz'
+
+- name: Determine the device of the target node device on the infra node
+  delegate_to: temp_node
+  shell: "ls -l /dev/disk/by-id/*{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id[5:] }} | awk -F \/ '{print $NF}'"
+  register: device_name
+
+- name: Set device name on temp node fact
+  set_fact:
+    temp_node_device_name: "/dev/{{ device_name.stdout }}"
+
+- name: Fix the gpt table to use the full disk
+  delegate_to: temp_node
+  shell: "sgdisk {{ temp_node_device_name }} -e"
+  when: ( target_root_vol_info.volumes[0].size < (new_root_volume_size | int) )
+
+#- debug:
+#    var: temp_node_device_name
 
 - name: Resize the root partition
   delegate_to: temp_node
   community.general.parted:
     device: '{{ temp_node_device_name }}'
-    number: 1
+    number: 2
     part_end: "{{ partition_size.root }}GiB"
     #unit: "GiB"
     resize: true
+    label: gpt
     fs_type: "xfs"
     state: present
-  tags:
-    - dan
 
 - name: Get root partition block ID
   delegate_to: temp_node
-  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}1'
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}p2'
   register: root_block_id
 
 - name: Create tmp partition
   delegate_to: temp_node
   community.general.parted:
     device: '{{ temp_node_device_name }}'
-    number: 2
+    number: 3
     part_start: "{{ partition_size.root }}GiB"
     part_end: "{{ partition_size.root + partition_size.tmp }}GiB"
     #unit: "GiB"
+    label: gpt
     fs_type: "xfs"
     state: present
 
@@ -108,21 +150,22 @@
   delegate_to: temp_node
   community.general.filesystem:
     fstype: xfs
-    dev: '{{ temp_node_device_name }}2'
+    dev: '{{ temp_node_device_name }}p3'
 
 - name: Get tmp partition block ID
   delegate_to: temp_node
-  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}2'
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}p3'
   register: tmp_block_id
 
 - name: Create var partition
   delegate_to: temp_node
   community.general.parted:
     device: '{{ temp_node_device_name }}'
-    number: 3
+    number: 4
     part_start: "{{ partition_size.root + partition_size.tmp }}GiB"
     part_end: "{{ partition_size.root + partition_size.tmp + partition_size.var }}GiB"
     #unit: "GiB"
+    label: gpt
     fs_type: "xfs"
     state: present
 
@@ -130,21 +173,22 @@
   delegate_to: temp_node
   community.general.filesystem:
     fstype: xfs
-    dev: '{{ temp_node_device_name }}3'
+    dev: '{{ temp_node_device_name }}p4'
 
 - name: Get var partition block ID
   delegate_to: temp_node
-  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}3'
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}p4'
   register: var_block_id
 
 - name: Create home partition
   delegate_to: temp_node
   community.general.parted:
     device: '{{ temp_node_device_name }}'
-    number: 4
+    number: 5
     part_start: "{{ partition_size.root + partition_size.tmp + partition_size.var }}GiB"
     part_end: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home }}GiB"
     #unit: "GiB"
+    label: gpt
     fs_type: "xfs"
     state: present
 
@@ -152,21 +196,22 @@
   delegate_to: temp_node
   community.general.filesystem:
     fstype: xfs
-    dev: '{{ temp_node_device_name }}4'
+    dev: '{{ temp_node_device_name }}p5'
 
 - name: Get home partition block ID
   delegate_to: temp_node
-  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}4'
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}p5'
   register: home_block_id
 
 - name: Create var_log_audit partition
   delegate_to: temp_node
   community.general.parted:
     device: '{{ temp_node_device_name }}'
-    number: 5
+    number: 6
     part_start: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home }}GiB"
     part_end: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home + partition_size.var_log_audit }}GiB"
     #unit: "GiB"
+    label: gpt
     fs_type: "xfs"
     state: present
 
@@ -174,11 +219,11 @@
   delegate_to: temp_node
   community.general.filesystem:
     fstype: xfs
-    dev: '{{ temp_node_device_name }}5'
+    dev: '{{ temp_node_device_name }}p6'
 
 - name: Get var_log_audit partition block ID
   delegate_to: temp_node
-  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}5'
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}p6'
   register: vla_block_id
 
 - name: Mount the root file system from the target node
@@ -194,7 +239,7 @@
   community.general.filesystem:
     fstype: xfs
     resizefs: true
-    dev: '{{ temp_node_device_name }}1'
+    dev: '{{ temp_node_device_name }}p2'
 
 - name: Create entry in fstab for tmp
   delegate_to: temp_node
@@ -240,7 +285,11 @@
     fstype: xfs
     state: absent
 
-- name: Detach root volume from the instance to be resized
+# Need to move any data from /var /tmp /home and /var/log/audit over to the new partitions
+#Duplicate the source system to the new root volume in a way that preserves links, XATTRs, and security contexts; /mnt is assumed as the target:
+#cd /; rsync -avWHAX --exclude=/dev --exclude=/sys --exclude=/run --exclude=/proc --exclude=/mnt . /mnt
+
+- name: Detach root volume from the infra instance
   delegate_to: localhost
   amazon.aws.ec2_vol:
     aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"

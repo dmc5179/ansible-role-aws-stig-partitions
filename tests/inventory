@@ -1,2 +1,15 @@
-localhost
+localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+
+[infra]
+temp_node ansible_host=ec2-34-227-190-178.compute-1.amazonaws.com
+#temp_node ansible_host=ec2-54-221-78-127.compute-1.amazonaws.com
+
+[infra:vars]
+
+ansible_ssh_private_key_file=/home/danclark/.ssh/danclark-personal.pem
+ansible_connection=ssh
+ansible_user=ec2-user
+ansible_become=yes
+ansible_become_method=sudo
+ansible_become_user=root
 
