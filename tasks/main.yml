@@ -355,7 +355,13 @@
 
 - name: Unmount the root file system from the target node
   delegate_to: temp_node
-  shell: "umount /opt/root"
+  shell: "umount {{ item }}"
+  with_items:
+    - '/opt/root'
+    - '/opt/tmp'
+    - '/opt/vla'
+    - '/opt/var'
+    - '/opt/home'
 
 - name: Detach root volume from the infra instance
   delegate_to: localhost
