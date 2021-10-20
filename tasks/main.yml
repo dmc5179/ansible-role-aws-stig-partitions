@@ -353,31 +353,31 @@
     fstype: xfs
     state: absent
 
-#- name: Unmount the root file system from the target node
-#  delegate_to: temp_node
-#  shell: "umount /opt/root"
-#
-#- name: Detach root volume from the infra instance
-#  delegate_to: localhost
-#  amazon.aws.ec2_vol:
-#    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
-#    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
-#    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
-#    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
-#    ec2_url: '{{ aws_ec2_url | default(omit) }}'
-#    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
-#    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
-#    instance: None
-#
-#- name: Reattach the volume to the target node
-#  delegate_to: localhost
-#  amazon.aws.ec2_vol:
-#    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
-#    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
-#    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
-#    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
-#    ec2_url: '{{ aws_ec2_url | default(omit) }}'
-#    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
-#    instance: '{{ target_instance_info.instances[0].instance_id }}'
-#    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
-#    device_name: '{{ target_instance_info.instances[0].block_device_mappings[0].device_name }}'
+- name: Unmount the root file system from the target node
+  delegate_to: temp_node
+  shell: "umount /opt/root"
+
+- name: Detach root volume from the infra instance
+  delegate_to: localhost
+  amazon.aws.ec2_vol:
+    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
+    instance: None
+
+- name: Reattach the volume to the target node
+  delegate_to: localhost
+  amazon.aws.ec2_vol:
+    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+    instance: '{{ target_instance_info.instances[0].instance_id }}'
+    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
+    device_name: '{{ target_instance_info.instances[0].block_device_mappings[0].device_name }}'
