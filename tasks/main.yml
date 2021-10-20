@@ -21,9 +21,9 @@
   delegate_to: localhost
   delegate_facts: true
 
-- name: Determine new root volume size
-  set_fact:
-    new_root_volume_size: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home + partition_size.var_log_audit | int}}"
+#- name: Determine new root volume size
+#  set_fact:
+#    new_root_volume_size: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home + partition_size.var_log_audit | int}}"
 
 #- debug:
 #    var: target_instance_info.instances[0]
@@ -120,10 +120,11 @@
 - name: Resize the root partition
   delegate_to: temp_node
   community.general.parted:
+    name: "root"
     device: '{{ temp_node_device_name }}'
     number: 2
-    part_end: "{{ partition_size.root }}GiB"
-    #unit: "GiB"
+    part_start: "{{ partitions.root.start }}"
+    part_end: "{{ partitions.root.end }}"
     resize: true
     label: gpt
     fs_type: "xfs"
@@ -137,11 +138,11 @@
 - name: Create tmp partition
   delegate_to: temp_node
   community.general.parted:
+    name: "tmp"
     device: '{{ temp_node_device_name }}'
     number: 3
-    part_start: "{{ partition_size.root }}GiB"
-    part_end: "{{ partition_size.root + partition_size.tmp }}GiB"
-    #unit: "GiB"
+    part_start: "{{ partitions.tmp.start }}"
+    part_end: "{{ partitions.tmp.end }}"
     label: gpt
     fs_type: "xfs"
     state: present
@@ -160,11 +161,11 @@
 - name: Create var partition
   delegate_to: temp_node
   community.general.parted:
+    name: "var"
     device: '{{ temp_node_device_name }}'
     number: 4
-    part_start: "{{ partition_size.root + partition_size.tmp }}GiB"
-    part_end: "{{ partition_size.root + partition_size.tmp + partition_size.var }}GiB"
-    #unit: "GiB"
+    part_start: "{{ partitions.var.start }}"
+    part_end: "{{ partitions.var.end }}"
     label: gpt
     fs_type: "xfs"
     state: present
@@ -180,37 +181,14 @@
   shell: 'blkid -s UUID -o value {{ temp_node_device_name }}p4'
   register: var_block_id
 
-- name: Create home partition
-  delegate_to: temp_node
-  community.general.parted:
-    device: '{{ temp_node_device_name }}'
-    number: 5
-    part_start: "{{ partition_size.root + partition_size.tmp + partition_size.var }}GiB"
-    part_end: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home }}GiB"
-    #unit: "GiB"
-    label: gpt
-    fs_type: "xfs"
-    state: present
-
-- name: Create home filesystem
-  delegate_to: temp_node
-  community.general.filesystem:
-    fstype: xfs
-    dev: '{{ temp_node_device_name }}p5'
-
-- name: Get home partition block ID
-  delegate_to: temp_node
-  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}p5'
-  register: home_block_id
-
 - name: Create var_log_audit partition
   delegate_to: temp_node
   community.general.parted:
+    name: "vla"
     device: '{{ temp_node_device_name }}'
-    number: 6
-    part_start: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home }}GiB"
-    part_end: "{{ partition_size.root + partition_size.tmp + partition_size.var + partition_size.home + partition_size.var_log_audit }}GiB"
-    #unit: "GiB"
+    number: 5
+    part_start: "{{ partitions.var_log_audit.start }}"
+    part_end: "{{ partitions.var_log_audit.end }}"
     label: gpt
     fs_type: "xfs"
     state: present
@@ -219,33 +197,95 @@
   delegate_to: temp_node
   community.general.filesystem:
     fstype: xfs
-    dev: '{{ temp_node_device_name }}p6'
+    dev: '{{ temp_node_device_name }}p5'
 
 - name: Get var_log_audit partition block ID
   delegate_to: temp_node
-  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}p6'
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}p5'
   register: vla_block_id
 
-- name: Mount the root file system from the target node
+- name: Create home partition
   delegate_to: temp_node
-  ansible.posix.mount:
-    path: /opt/root
-    src: "UUID={{ root_block_id }}"
-    fstype: xfs
-    state: mounted
+  community.general.parted:
+    name: "home"
+    device: '{{ temp_node_device_name }}'
+    number: 6
+    part_start: "{{ partitions.home.start }}"
+    part_end: "{{ partitions.home.end }}"
+    label: gpt
+    fs_type: "xfs"
+    state: present
 
-- name: Resize the root filesystem
+- name: Create home filesystem
   delegate_to: temp_node
   community.general.filesystem:
     fstype: xfs
-    resizefs: true
-    dev: '{{ temp_node_device_name }}p2'
+    dev: '{{ temp_node_device_name }}p6'
+
+- name: Get home partition block ID
+  delegate_to: temp_node
+  shell: 'blkid -s UUID -o value {{ temp_node_device_name }}p6'
+  register: home_block_id
+
+- name: Create directory to mount root file system from target node
+  delegate_to: temp_node
+  file:
+    path: '{{ item }}'
+    state: directory
+  with_items:
+    - '/opt/root'
+    - '/opt/tmp'
+    - '/opt/var'
+    - '/opt/vla'
+    - '/opt/home'
+
+- name: Mount the root file system from the target node
+  delegate_to: temp_node
+  shell: "mount -o rw,nouuid {{ temp_node_device_name }}p2 /opt/root"
+
+- name: Mount the tmp file system from the target node
+  delegate_to: temp_node
+  shell: "mount -o rw,nouuid {{ temp_node_device_name }}p3 /opt/tmp"
+
+- name: Mount the var file system from the target node
+  delegate_to: temp_node
+  shell: "mount -o rw,nouuid {{ temp_node_device_name }}p4 /opt/var"
+
+- name: Mount the vla file system from the target node
+  delegate_to: temp_node
+  shell: "mount -o rw,nouuid {{ temp_node_device_name }}p5 /opt/vla"
+
+- name: Mount the home file system from the target node
+  delegate_to: temp_node
+  shell: "mount -o rw,nouuid {{ temp_node_device_name }}p6 /opt/home"
+
+  # nouuid is required because UUIDs of the same AMI root volume are the same
+#- name: Mount the root file system from the target node
+#  delegate_to: temp_node
+#  ansible.posix.mount:
+#    path: /opt/root
+#    src: "UUID={{ root_block_id.stdout }}"
+#    opts: rw,nouuid
+#    fstype: xfs
+#    state: mounted
+
+- name: Resize the root filesystem
+  delegate_to: temp_node
+  shell: 'xfs_growfs {{ temp_node_device_name }}p2'
+
+# Note: This task seems to corrupt the root file system. Use xfs_growfs directly above
+#- name: Resize the root filesystem
+#  delegate_to: temp_node
+#  community.general.filesystem:
+#    fstype: xfs
+#    resizefs: true
+#    dev: '{{ temp_node_device_name }}p2'
 
 - name: Create entry in fstab for tmp
   delegate_to: temp_node
   ansible.posix.mount:
     path: /tmp
-    src: "UUID={{ tmp_block_id }}"
+    src: "UUID={{ tmp_block_id.stdout }}"
     fstype: xfs
     fstab: '/opt/root/etc/fstab'
     state: present
@@ -254,7 +294,7 @@
   delegate_to: temp_node
   ansible.posix.mount:
     path: /var
-    src: "UUID={{ var_block_id }}"
+    src: "UUID={{ var_block_id.stdout }}"
     fstype: xfs
     fstab: '/opt/root/etc/fstab'
     state: present
@@ -263,7 +303,7 @@
   delegate_to: temp_node
   ansible.posix.mount:
     path: /home
-    src: "UUID={{ home_block_id }}"
+    src: "UUID={{ home_block_id.stdout }}"
     fstype: xfs
     fstab: '/opt/root/etc/fstab'
     state: present
@@ -272,44 +312,72 @@
   delegate_to: temp_node
   ansible.posix.mount:
     path: /var/log/audit
-    src: "UUID={{ vla_block_id }}"
+    src: "UUID={{ vla_block_id.stdout }}"
     fstype: xfs
     fstab: '/opt/root/etc/fstab'
     state: present
+
+# Need to mount all the sub partitions:
+
+# Copy data from original root to sub partitions
+# root,tmp,var,vla,home
+- name: Clone content from /tmp to new /tmp
+  delegate_to: temp_node
+  shell: "rsync -avWHAX /opt/root/tmp/ /opt/tmp/"
+
+- name: Clone content from /var to new /var
+  delegate_to: temp_node
+  shell: "rsync -avWHAX --exclude=/opt/root/var/run --exclude=/opt/root/var/log /opt/root/var/ /opt/var/"
+
+- name: Clone content from /var/log to new /var/log
+  delegate_to: temp_node
+  shell: "rsync -avWHAX --exclude=/opt/root/var/log/audit/ /opt/root/var/log /opt/var/log/"
+
+- name: Clone content from /vla to new /vla
+  delegate_to: temp_node
+  shell: "rsync -avWHAX /opt/root/var/log/audit/ /opt/vla/"
+
+- name: Clone content from /home to new /home
+  delegate_to: temp_node
+  shell: "rsync -avWHAX /opt/root/home/ /opt/home/"
+
+- name: Update systemd after altering fstab
+  delegate_to: temp_node
+  shell: "chroot /opt/root systemctl daemon-reload"
 
 - name: Unmount the root file system from the target node
   delegate_to: temp_node
   ansible.posix.mount:
     path: /opt/root
-    src: "UUID={{ root_block_id }}"
+    src: "UUID={{ root_block_id.stdout }}"
     fstype: xfs
     state: absent
 
-# Need to move any data from /var /tmp /home and /var/log/audit over to the new partitions
-#Duplicate the source system to the new root volume in a way that preserves links, XATTRs, and security contexts; /mnt is assumed as the target:
-#cd /; rsync -avWHAX --exclude=/dev --exclude=/sys --exclude=/run --exclude=/proc --exclude=/mnt . /mnt
-
-- name: Detach root volume from the infra instance
-  delegate_to: localhost
-  amazon.aws.ec2_vol:
-    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
-    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
-    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
-    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
-    ec2_url: '{{ aws_ec2_url | default(omit) }}'
-    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
-    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
-    instance: None
-
-- name: Reattach the volume to the target node
-  delegate_to: localhost
-  amazon.aws.ec2_vol:
-    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
-    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
-    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
-    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
-    ec2_url: '{{ aws_ec2_url | default(omit) }}'
-    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
-    instance: '{{ target_instance_info.instances[0].instance_id }}'
-    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
-    device_name: '{{ target_instance_info.instances[0].block_device_mappings[0].device_name }}'
+#- name: Unmount the root file system from the target node
+#  delegate_to: temp_node
+#  shell: "umount /opt/root"
+#
+#- name: Detach root volume from the infra instance
+#  delegate_to: localhost
+#  amazon.aws.ec2_vol:
+#    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+#    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+#    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+#    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+#    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+#    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+#    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
+#    instance: None
+#
+#- name: Reattach the volume to the target node
+#  delegate_to: localhost
+#  amazon.aws.ec2_vol:
+#    aws_access_key: "{{ ansible_env.AWS_ACCESS_KEY_ID | default(omit) }}"
+#    aws_secret_key: "{{ ansible_env.AWS_SECRET_ACCESS_KEY | default(omit) }}"
+#    security_token: "{{ ansible_env.AWS_SESSION_TOKEN | default(omit) }}"
+#    region: "{{ ansible_env.AWS_DEFAULT_REGION | default(omit) }}"
+#    ec2_url: '{{ aws_ec2_url | default(omit) }}'
+#    validate_certs: '{{ aws_ssl_enabled | default(omit) }}'
+#    instance: '{{ target_instance_info.instances[0].instance_id }}'
+#    id: '{{ target_instance_info.instances[0].block_device_mappings[0].ebs.volume_id }}'
+#    device_name: '{{ target_instance_info.instances[0].block_device_mappings[0].device_name }}'
