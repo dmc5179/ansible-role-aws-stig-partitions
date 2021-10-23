@@ -6,17 +6,29 @@ Ansible role to convert a RHEL 8 EC2 Instance to use STIG compliant partitions
 Requirements
 ------------
 
-Any pre-requisites that may not be covered by Ansible itself or the role should be mentioned here. For instance, if the role uses the EC2 module, it may be a good idea to mention in this section that the boto package is required.
 
 Role Variables
 --------------
 
-A description of the settable variables for this role should go here, including any variables that are in defaults/main.yml, vars/main.yml, and any variables that can/should be set via parameters to the role. Any variables that are read from other roles and/or the global scope (ie. hostvars, group vars, etc.) should be mentioned here as well.
+| Variable                       | Default | Comments (type)                                                |
+| :---                           | :---    | :---                                                           |
+| aws_instance_id                | i-      | EC2 instance ID of the node to have its partitions resized     |
+| temp_node_id                   | i-      | EC2 instance ID of the node used to repartition the node above |
+| new_root_volume_size           | 100     | New size of the root volume in GBs                             |
+| partitions.root.start          | 0%      | root parition start percentage                                 |
+| partitions.root.end            | 30%     | root partition end percentage                                  |
+| partitions.tmp.start           | 30%     | tmp  parition start percentage                                 |
+| partitions.tmp.end             | 40%     | tmp partition end percentage                                   |
+| partitions.var.start           | 40%     | var  parition start percentage                                 |
+| partitions.var.end             | 50%     | var partition end percentage                                   |
+| partitions.var_log_audit.start | 50%     | var_log_audit  parition start percentage                       |
+| partitions.var_log_audit.end   | 60%     | var_log_audit partition end percentage                         |
+| partitions.home.start          | 60%     | home  parition start percentage                                |
+| partitions.home.end            | 100%    | home partition end percentage                                  |
 
 Dependencies
 ------------
 
-A list of other roles hosted on Galaxy should go here, plus any details in regards to parameters that may need to be set for other roles, or variables that are used from other roles.
 
 Example Playbook
 ----------------
